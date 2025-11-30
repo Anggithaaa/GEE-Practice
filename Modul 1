@@ -1,0 +1,454 @@
+// =======================
+// PENDAHULUAN & BASIC
+// =======================
+print('Hello World');
+
+// Variables
+var city = 'Penajam Paser Utara';
+var country = 'Indonesia';
+print(city, country);
+
+var population = 180000; // estimasi penduduk PPU (dibulatkan)
+print(population);
+
+// List – kota besar di sekitar IKN
+var majorCities = ['Balikpapan', 'Samarinda', 'Tenggarong', 'Penajam'];
+print(majorCities);
+
+// Dictionary – data kota
+var cityData = {
+  'city': city,
+  'population': 180000,
+  'elevation': 5  // rata-rata elevasi PPU (umumnya dataran rendah)
+};
+print(cityData);
+
+// Function
+var greet = function(name) {
+    return 'Hello ' + name;
+};
+print(greet('Penajam Paser Utara'));
+
+// =======================
+// AREA OF INTEREST
+// =======================
+
+// AOI persegi panjang
+var aoi = ee.Geometry.Rectangle([116.60, -1.05, 116.80, -0.90]);
+
+// Load Landsat + Filter tanggal + AOI + Cloud Cover
+var dataset = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+    .filterBounds(aoi)
+    .filterDate('2022-06-01', '2023-06-01')
+    .filter(ee.Filter.lt('CLOUD_COVER', 20));     // <--- Cloud cover < 20%
+
+// Scaling factor
+function applyScaleFactors(image) {
+  var opticalBands = image.select('SR_B.*')
+      .multiply(0.0000275)
+      .add(-0.2);
+  var thermalBands = image.select('ST_B.*')
+      .multiply(0.00341802)
+      .add(149.0);
+  return image.addBands(opticalBands, null, true)
+              .addBands(thermalBands, null, true);
+}
+
+var landsatScaled = dataset.map(applyScaleFactors);
+
+// Visualisasi
+var visualization = {
+  bands: ['SR_B4', 'SR_B3', 'SR_B2'], // true color
+  min: 0.0,
+  max: 0.3,
+};
+
+// Center ke AOI
+Map.centerObject(aoi, 11);
+Map.addLayer(landsatScaled.median().clip(aoi), visualization, 'Landsat True Color');
+Map.addLayer(aoi, {color: 'red'}, 'AOI');
+
+
+// =======================
+// PIN LOKASI 
+// =======================
+
+// Definisikan Titik Koordinat
+var longitude1 = 116.7081284977183;
+var latitude1 = -0.9725115597362979;
+var longitude2 = 116.7840246155039;
+var latitude2 = -0.9948993406205462;
+
+// Buat Objek Geometri Point
+var pin_lokasi1 = ee.Geometry.Point(longitude1, latitude1);
+var pin_lokasi2 = ee.Geometry.Point(longitude2, latitude2);
+
+// Definisikan Visualisasi
+var visualisasi_pin1 = {
+  color: 'blue',
+  pointSize: 10,
+};
+var visualisasi_pin2 = {
+  color: 'red',
+  pointSize: 10,
+};
+
+// Tampilkan Pin di Peta
+Map.addLayer(pin_lokasi1, visualisasi_pin1, 'Titik Nol Nusantara');
+Map.addLayer(pin_lokasi2, visualisasi_pin2, 'Gunung Ayun');
+
+
+// =======================
+// MODUL 1
+// =======================
+
+//=======EXERCISE 1
+
+// We use TerraClimate Dataset
+var terraclimate = ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE');
+
+// Filter the collection
+var startYear = 2022;
+var endYear = 2023;
+var startDate = ee.Date.fromYMD(startYear, 6, 1);
+var endDate = ee.Date.fromYMD(startYear + 1, 6, 1);
+
+var filteredTerra = terraclimate
+  .select(['tmmx', 'tmmn'])
+  .filter(ee.Filter.date(startDate, endDate));
+  
+// The pixel values have a scale factor of 0.1
+// We must multiply the pixel values with the scale factor
+// to get the temperature values in °C
+var tempScaled = filteredTerra.map(function(image) {
+  return image.multiply(0.1)
+    .copyProperties(image,['system:time_start']);
+});
+
+// Create a time-series chart
+var chart = ui.Chart.image.series({
+  imageCollection: tempScaled,
+  region: aoi,
+  reducer: ee.Reducer.mean(),
+  scale: 4638.3
+});
+
+// Print the chart
+print(chart);
+
+// We can use .setOptions() to customize the chart
+var chart = ui.Chart.image.series({
+  imageCollection: tempScaled,
+  region: aoi,
+  reducer: ee.Reducer.mean(),
+  scale: 4638.3
+}).setOptions({
+  lineWidth: 1,
+  pointSize: 2,
+  title: 'Monthly Temperature Time-Series (TerraClimate)',
+  vAxis: {title: 'Temparature (°C)'},
+  hAxis: {title: 'Date', format: 'YYYY-MMM', gridlines: {count: 12}},
+  series: {
+        0: {color: 'red', labelInLegend: 'Max Temp'},
+        1: {color: 'blue', labelInLegend: 'Min Temp'}
+      },
+})
+print(chart);    
+    
+// We can select multiple bands and get a time-series for each band
+// Additionally, we can specify the 'series' options
+// to specify styling options for each series.
+var chart = ui.Chart.image.series({
+  imageCollection: tempScaled,
+  region: aoi,
+  reducer: ee.Reducer.mean(),
+  scale: 4638.3
+}).setChartType('LineChart')
+  .setOptions({
+      lineWidth: 1,
+      pointSize: 2,
+      title: 'Monthly Temperature Time-Series',
+      vAxis: {title: 'Temparature (°C)'},
+      hAxis: {title: '', format: 'YYYY-MMM', gridlines: {count: 12}},
+      series: {
+        0: {color: 'red'},
+        1: {color: 'blue'}
+      },
+    })
+
+// Print the chart
+print(chart);
+
+//=======EXERCISE 2
+// Select a region
+var aoi = ee.Geometry.Rectangle([116.60, -1.05, 116.80, -0.90])
+
+// We use the CHIRPS Rainfall Dataset
+var chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/PENTAD');
+
+// We will compute the trend of total annual precipitation
+var createAnnualImage = function(year) {
+  var startDate = ee.Date.fromYMD(year, 1, 1);
+  var endDate = startDate.advance(1, 'year');
+  var seasonFiltered = chirps
+    .filter(ee.Filter.date(startDate, endDate));
+  // Calculate total precipitation
+  var total = seasonFiltered.reduce(ee.Reducer.sum()).rename('Precipitation');
+  return total.set({
+    'system:time_start': startDate.millis(),
+    'system:time_end': endDate.millis(),
+    'year': year,
+  });
+};
+
+// Aggregate Precipitation Data over 40 years
+var years = ee.List.sequence(1981, 2020);
+var yearlyImages = years.map(createAnnualImage);
+var yearlyCol = ee.ImageCollection.fromImages(yearlyImages);
+
+// Create a time-series with a trendline
+var chart = ui.Chart.image.series({
+  imageCollection: yearlyCol,
+  region: aoi,
+  reducer: ee.Reducer.mean(),
+  scale: 5566,
+}).setOptions({
+    title: 'Annual Total Precipitation',
+    color: 'blue',
+    pointSize: 3,
+    lineWidth: 1,
+    vAxis: {
+      title: 'Rainfall (mm)',
+      ticks: [0, 200, 400, 600, 800, 1000, 1200, 1400], 
+      gridlines: {color: '#f0f0f0'}
+    },
+    hAxis: {
+      title: 'Year',
+      gridlines: {color: '#f0f0f0'}
+    },
+    series: {
+      0: {
+        visibleInLegend: false
+      }
+    },
+    trendlines: {
+      0: {
+        type: 'linear', 
+        color: 'black', 
+        lineWidth: 1,
+        pointSize: 0,
+        visibleInLegend: true,
+        labelInLegend: 'Precipitation Trend',
+      }
+    },
+    legend: {
+      position: 'none'
+    }
+});
+print(chart);
+
+//=======EXERCISE 3
+// Select the locations
+var lokasi1 = ee.Geometry.Point([116.7081284977183,-0.9725115597362979]);
+var lokasi2 = ee.Geometry.Point([116.7840246155039,-0.9948993406205462]);
+    
+// We use the NOAA GFS dataset
+var gfs = ee.ImageCollection('NOAA/GFS0P25');
+
+// Select the temperature band
+var forecast = gfs.select('temperature_2m_above_ground');
+
+// Get the forecasts for today
+// Forecasts are generated every 6 hours
+
+// To account for ingestion delay, we get the forests
+// generated in past 12 hours
+// If you still get an error, increase the number of hours
+var periodHours = 12; 
+var now = ee.Date(Date.now());
+var before = now.advance(-periodHours, 'hour');
+
+var filtered = forecast
+  .filter(ee.Filter.date(before, now))
+  .limit(100);
+
+// All forecast images have a timestamp of the current day
+// As we want a time-series of forecasts, we update the
+// timestamp to the date the image is forecasting.
+var filtered = filtered.select('temperature_2m_above_ground')
+  .map(function(image) {
+    var forecastTime = image.get('forecast_time');
+    return image.set('system:time_start', forecastTime);
+  });
+
+// Create a chart of forecast at a single location
+var chart1 = ui.Chart.image.series({
+  imageCollection: filtered,
+  region: lokasi1,
+  reducer: ee.Reducer.first(),
+  scale: 27830}).setOptions({
+    lineWidth: 1,
+    pointSize: 2,
+    title: 'Temperature Forecast at Titik Nol Nusantara',
+    vAxis: {
+      title: 'Temparature (°C)',
+    },
+    hAxis: {
+      title: 'Time', 
+      format: 'MM-dd HH:mm',
+      gridlines: {count: 5}
+    },
+    series: {
+      0: {color: '#fc8d62'},
+    },
+    legend: {
+      position: 'none'
+    }
+  });
+print(chart1);
+
+var chart2 = ui.Chart.image.series({
+  imageCollection: filtered,
+  region: lokasi2,
+  reducer: ee.Reducer.first(),
+  scale: 27830}).setOptions({
+    lineWidth: 1,
+    pointSize: 2,
+    title: 'Temperature Forecast at Gunung Ayun',
+    vAxis: {
+      title: 'Temparature (°C)',
+    },
+    hAxis: {
+      title: 'Time', 
+      format: 'MM-dd HH:mm',
+      gridlines: {count: 5}
+    },
+    series: {
+      0: {color: '#fc8d62'},
+    },
+    legend: {
+      position: 'none'
+    }
+  });
+print(chart2);
+
+
+// For plotting multiple locations, we need a FeatureCollection
+var locations = ee.FeatureCollection([
+  ee.Feature(lokasi1, {'name': 'Titik Nol Nusantara'}),
+  ee.Feature(lokasi2, {'name': 'Gunung Ayun'})
+  ]);
+  
+// Create a chart of forecasted temperatures
+var chart = ui.Chart.image.seriesByRegion({
+  imageCollection: filtered,
+  regions: locations,
+  reducer: ee.Reducer.first(),
+  scale: 27830,
+  seriesProperty: 'name'
+}).setOptions({
+      lineWidth: 1,
+      pointSize: 2,
+      title: 'Temperature Forecast at Multiple Locations',
+      vAxis: {
+        title: 'Temperature (°C)',
+      },
+      hAxis: {title: 'Time', format: 'MM-dd HH:mm'},
+      series: {
+        0: {color: '#fc8d62'},
+        1: {color: '#8da0cb'}
+      },
+      legend: {
+        position: 'top'
+      }
+    });
+print(chart);
+
+//=======EXERCISE 4
+// Select a location
+var lokasi1 = ee.Geometry.Point([116.7081284977183,-0.9725115597362979]);
+
+// We use the MODIS 16-day Vegetation Indicies dataset
+var modis = ee.ImageCollection('MODIS/061/MOD13Q1');
+
+// Filter the collection
+var startYear = 2019;
+var endYear = 2023;
+
+var startDate = ee.Date.fromYMD(startYear, 6, 1);
+var endDate = ee.Date.fromYMD(endYear + 1, 6, 1);
+
+var filtered = modis
+  .filter(ee.Filter.date(startDate, endDate))
+  
+// Pre-Processing: Cloud Masking and Scaling
+
+// Function for Cloud Masking
+var bitwiseExtract = function(input, fromBit, toBit) {
+  var maskSize = ee.Number(1).add(toBit).subtract(fromBit)
+  var mask = ee.Number(1).leftShift(maskSize).subtract(1)
+  return input.rightShift(fromBit).bitwiseAnd(mask)
+}
+
+var maskSnowAndClouds = function(image) {
+  var summaryQa = image.select('SummaryQA')
+  // Select pixels which are less than or equals to 1 (0 or 1)
+  var qaMask = bitwiseExtract(summaryQa, 0, 1).lte(1)
+  var maskedImage = image.updateMask(qaMask)
+  return maskedImage.copyProperties(
+    image, ['system:index', 'system:time_start'])
+}
+
+// Function for Scaling Pixel Values
+// MODIS NDVI values come as NDVI x 10000
+// that need to be scaled by 0.0001
+var ndviScaled = function(image) {
+  var scaled = image.divide(10000)
+  return scaled.copyProperties(
+    image, ['system:index', 'system:time_start'])
+};
+
+// Apply the functions and select the 'NDVI' band
+var processedCol = filtered
+  .map(maskSnowAndClouds)
+  .map(ndviScaled)
+  .select('NDVI');
+
+// Plot a time-series
+var chart = ui.Chart.image.series({
+  imageCollection: processedCol,
+  region: lokasi1,
+  reducer: ee.Reducer.mean(),
+  scale: 250
+}).setOptions({
+    interpolateNulls: true,
+    lineWidth: 2,
+    pointSize: 0,
+    title: 'NDVI Time-Series',
+    vAxis: {title: 'NDVI'},
+    colors: ['#7a0177']
+})
+print(chart);
+
+// We can plot a yearly time-series 
+// that allows us to compare changes over time
+var chart = ui.Chart.image.doySeriesByYear({
+  imageCollection: processedCol,
+  region: lokasi1,
+  regionReducer: ee.Reducer.mean(),
+  scale: 250,
+  bandName: 'NDVI'
+}).setOptions({
+      interpolateNulls: true,
+      curveType: 'function',
+      lineWidth: 2,
+      pointSize: 0,
+      title: 'Multi-Year NDVI Time-Series',
+      vAxis: {title: 'NDVI'},
+      hAxis: {title: 'Day-of-Year'},
+      legend: {position: 'top'},
+      colors: ['#7a0177', '#c51b8a', '#f768a1', '#fa9fb5', '#fcc5c0', '#feebe2']
+    })
+print(chart)
+
+
