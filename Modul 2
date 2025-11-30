@@ -1,0 +1,284 @@
+// =======================
+// MODUL 2
+// =======================
+
+//=======EXERCISE 1
+// We use the Harmonized Global Night Time Lights (1992-2020) dataset
+var dmsp = ee.ImageCollection('projects/sat-io/open-datasets/Harmonized_NTL/dmsp');
+var viirs = ee.ImageCollection('projects/sat-io/open-datasets/Harmonized_NTL/viirs');
+
+// Merge both collections to create a single Night Lights Collection
+var ntlCol = dmsp.merge(viirs);
+
+// Using GeoBoundries admin boundaries
+var admin0 = ee.FeatureCollection("projects/sat-io/open-datasets/geoboundaries/CGAZ_ADM0");
+var admin1 = ee.FeatureCollection("projects/sat-io/open-datasets/geoboundaries/CGAZ_ADM1");
+var admin2 = ee.FeatureCollection("projects/sat-io/open-datasets/geoboundaries/CGAZ_ADM2");
+
+// Select a Admin0 value
+print(admin0.aggregate_array('shapeName'));
+var admin0Name = 'Indonesia';
+
+// Now we have admin0 values, fetch admin1 values for that country
+
+var selectedAdmin0 = admin0.filter(ee.Filter.eq('shapeName', admin0Name));
+var shapeID = ee.Feature(selectedAdmin0.first()).get('shapeID');
+var admin1Filtered = admin1.filter(ee.Filter.eq('ADM0_shape', shapeID));
+
+// Select a Admin1 value
+print(admin1Filtered.aggregate_array('shapeName'));
+var admin1Name = 'East Java';
+
+var selected = admin1Filtered
+        .filter(ee.Filter.eq('shapeName', admin1Name))
+        
+var geometry = selected.geometry();
+
+var createNTLChart = function(admin1Name, year) {
+  var startDate = ee.Date.fromYMD(year, 1, 1);
+  var endDate = startDate.advance(1, 'year')
+
+// We filter for the selected year
+  var filtered = ntlCol
+    .filter(ee.Filter.date(startDate, endDate))
+
+// Extract the image and set the masked pixels to 0
+  var ntlImage = ee.Image(filtered.first()).unmask(0);
+
+  var palette =['#253494','#2c7fb8','#41b6c4','#a1dab4','#ffffcc' ];
+  var ntlVis = {min:0, max: 63,  palette: palette}
+
+  Map.centerObject(geometry, 10);
+  Map.addLayer(ntlImage.clip(geometry), ntlVis, 'Night Time Lights ' + year);
+
+// Extract the native resolution of the image
+  var resolution = ntlImage.projection().nominalScale();
+
+// NTL images have DN values from 0-63
+// We can create a histogram to show pixel counts
+// for each DN value
+  var chart = ui.Chart.image.histogram({
+    image: ntlImage,
+    region: geometry,
+    scale: resolution,
+    maxBuckets: 63,
+    minBucketWidth: 1})
+
+  print(chart);
+
+// Two Charts
+  var chartGab = ui.Chart.image.histogram({
+     image: ntlImage,
+      region: geometry,
+      scale: resolution,
+      maxBuckets: 63,
+      minBucketWidth: 1
+   }).setOptions({
+      title: 'Night Time Lights Distribution: ' + admin1Name + ' ' + year,
+      vAxis: {title: 'Number of Grids'},
+      hAxis: {
+      title: 'Level of Observed Nighttime Lights',
+      ticks: [0, 6, 13, 21, 29, 37, 45, 53, 61]
+      },
+      colors: ['#377eb8'] // Warna kustom untuk perbandingan
+  });
+  
+  return chartGab;
+};
+
+// Panggil fungsi untuk tahun 2010 (DMSP) dan 2020 (VIIRS)
+var chart2010 = createNTLChart(admin1Name,2010);
+var chart2020 = createNTLChart(admin1Name,2020);
+
+var sideBySidePanel = ui.Panel({
+  widgets: [chart2010, chart2020],
+  layout: ui.Panel.Layout.flow('horizontal') // <--- KUNCI AGAR SEJAJAR
+});
+
+print(sideBySidePanel);
+
+//=======EXERCISE 2
+// We want to plot the relationship between
+// 2 spectral bands for different classes
+
+// Select a region
+var aoi = ee.Geometry.Polygon([
+  [
+    [116.60, -1.05], // Titik 1
+    [116.80, -1.05], // Titik 2
+    [116.80, -0.90], // Titik 3
+    [116.60, -0.90]  // Titik 4
+  ]
+]);
+
+// We use the Sentinel-2 SR data
+var s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED');
+
+// Add function for cloud masking
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0).and(
+             qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask)
+      .select('B.*')
+      .multiply(0.0001)
+      .copyProperties(image, ['system:time_start']);
+}
+
+// Filter and apply cloud mask
+var filtered = s2
+.filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+  .filter(ee.Filter.date('2020-01-01', '2021-01-01'))
+  .filter(ee.Filter.bounds(aoi))
+  .map(maskS2clouds)
+  .select('B.*');
+
+// Create a composite
+var composite = filtered.median();
+
+var rgbVis = {bands: ['B4', 'B3', 'B2'], min: 0, max: 0.3, gamma: 1.2};
+Map.centerObject(aoi, 12);
+Map.addLayer(composite.clip(aoi), rgbVis, 'RGB');
+
+// Use the Global Surface Water Yearly dataset
+var gswYearly = ee.ImageCollection('JRC/GSW1_4/YearlyHistory');
+
+// Extract the image for the chosen year
+var filtered = gswYearly.filter(ee.Filter.eq('year', 2020));
+var gsw2020 = ee.Image(filtered.first());
+
+// Select permanent or seasonal water
+var water = gsw2020.eq(3).or(gsw2020.eq(2)).rename('water');
+var waterVis = {min:0, max:1, palette: ['white','blue']};
+Map.addLayer(water.clip(aoi).selfMask(), waterVis, 'Water', false);
+
+// We want to splot the relationship between 
+// 'NIR' (B8) and 'GREEN' (B3) band reflectance
+// for water and non-water pixels
+
+// Select the bands
+var bands = composite.select(['B3', 'B11']);
+
+// Extract samples for both classes
+var samples = bands.addBands(water).stratifiedSample({
+  numPoints: 50,
+  classBand: 'water',
+  region: aoi,
+  scale: 10})
+
+print(samples.first());
+
+// Create a chart and set the chart type
+var chart = ui.Chart.feature.groups({
+  features: samples,
+  xProperty: 'B11',
+  yProperty: 'B3',
+  seriesProperty: 'water'
+}).setChartType('ScatterChart');
+  
+print(chart);
+
+// Customize the style
+var chart = ui.Chart.feature.groups({
+  features: samples,
+  xProperty: 'B11',
+  yProperty: 'B3',
+  seriesProperty: 'water'
+}).setChartType('ScatterChart')
+  .setOptions({
+    title: 'Relationship Among Spectral Values ' +
+      'for Water and Non-Water Pixels',
+    titleTextStyle: {bold: true},
+    dataOpacity: 0.8,
+    hAxis: {
+      'title': 'Green reflectance',
+      titleTextStyle: {italic: true},
+    },
+    vAxis: {
+      'title': 'NIR Reflectance',
+      titleTextStyle: {italic: true},
+
+    },
+    series: {
+      0: {
+        pointShape: 'triangle',
+        pointSize: 4,
+        color: '#2c7bb6',
+        labelInLegend: 'Water',
+        },
+      1: {
+        pointShape: 'triangle',
+        pointSize: 4,
+        color: '#f46d43',
+        labelInLegend: 'Non-Water'
+      }
+    },
+    legend: {position: 'in'}
+    });
+print(chart);
+
+//=======EXERCISE 3
+// Select a region
+var lokasi1 = ee.Geometry.Point([116.7081284977183,-0.9725115597362979]);
+
+// We use the ESA WorldCover 2021 dataset
+var worldcover = ee.ImageCollection('ESA/WorldCover/v200').first();
+
+// The image has 11 classes
+// Remap the class values to have continuous values
+// from 0 to 10
+var classified = worldcover.remap(
+  [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100],
+  [0,  1 , 2,  3,  4,  5,  6,  7,  8,  9,  10]).rename('classification');
+
+// Define a list of class names
+var worldCoverClassNames= [
+  'Tree Cover', 'Shrubland', 'Grassland', 'Cropland', 'Built-up',
+  'Bare / sparse Vegetation', 'Snow and Ice', 
+  'Permanent Water Bodies', 'Herbaceous Wetland', 
+  'Mangroves', 'Moss and Lichen'];
+// Define a list of class colors
+var worldCoverPalette = [
+  '006400', 'ffbb22', 'ffff4c', 'f096ff', 'fa0000',
+  'b4b4b4', 'f0f0f0', '0064c8', '0096a0', '00cf75',
+  'fae6a0'];
+  
+var visParams = {min:0, max:10, palette: worldCoverPalette};
+Map.addLayer(classified, visParams, 'Landcover');
+
+// We want to compute the class areas in a buffer zone
+var bufferDistance = 10000;
+var buffer = lokasi1.buffer(bufferDistance);
+Map.centerObject(buffer, 12);
+Map.addLayer(buffer, {color: 'gray'}, 'Buffer Zone');
+
+// Create an area image and convert to Hectares
+var areaImage = ee.Image.pixelArea().divide(1e6);
+
+// Add the band containing classes
+var areaImageWithClass = areaImage.addBands(classified);
+
+// Create a chart
+var chart = ui.Chart.image.byClass({
+  image: areaImageWithClass,
+  classBand: 'classification',
+  region: buffer,
+  reducer: ee.Reducer.sum(),
+  scale: 10,
+});
+print(chart);
+
+// Set the chart type and add styling options
+var chart = ui.Chart.image.byClass({
+  image: areaImageWithClass,
+  classBand: 'classification',
+  region: buffer,
+  reducer: ee.Reducer.sum(),
+  scale: 10,
+  classLabels: worldCoverClassNames,
+  xLabels: ['Area (Square Kilometers)']
+}).setChartType('Table');
+
+print(chart);
